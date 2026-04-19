@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
 from django.contrib.auth.models import User
-
+from django.utils import timezone
 
 # ─── 1. CENTRE ───────────────────────────────────────────────────────────────
 
@@ -12,16 +12,32 @@ class Centre(models.Model):
     centre_state = models.CharField(max_length=100, default="Delhi")
     centre_contact = models.CharField(max_length=20, null=True, blank=True)
     centre_email = models.EmailField(null=True, blank=True)
+    centre_desc = models.TextField(null=True, blank=True)
+    centre_admin = models.OneToOneField('account.User', on_delete=models.SET_NULL,  null=True,  blank=True, 
+        related_name='managed_centre',
+        limit_choices_to={'role': 'centreadmin'}
+    )
 
     def __str__(self):
-        return self.centre_name
+        return f"{self.centre_name} - {self.centre_state} - {self.centre_address}"
 
 
 # ─── 2. COURSE CATEGORY ──────────────────────────────────────────────────────
 
 class CourseCategory(models.Model):
+    CATEGORY_TYPE_CHOICES = [
+        ('A', 'A - Long Term >500hrs'),
+        ('B', 'B - Short Term 91-500hrs'),
+        ('C', 'C - Digital Competency ≤90hrs'),
+        ('D', 'D - NIELIT DLC Courses'),
+        ('E', 'E - NIELIT DLC Exams'),
+        ('F', 'F - Summer Training'),
+        ('G', 'G - Workshop'),
+        ('H', 'H - NSQF'),
+        ('I', 'I - Non-NSQF'),
+    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    category_type = models.CharField(max_length=5)            
+    category_type = models.CharField(max_length=1, choices=CATEGORY_TYPE_CHOICES)
     category_name = models.CharField(max_length=200) 
     course_category_desc = models.TextField(null = True, blank = True)
     created_datetime = models.DateTimeField(auto_now_add = True, null = True, blank = True)         
@@ -51,14 +67,14 @@ class Course(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_name = models.CharField(max_length=300)  
     course_category = models.ForeignKey(CourseCategory, on_delete=models.CASCADE, related_name="courses")
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name="courses")
-    course_name = models.CharField(max_length=300)  
     course_desc = models.TextField(null = True, blank = True)         
-    duration_hours = models.IntegerField()                    
-    mode = models.CharField(max_length=20, choices=MODE_CHOICES, null=True, blank=True)
-    scheme = models.CharField(max_length=100, null=True, blank=True)  # Future Skills, Corporate…
-    fee_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    duration_hours = models.IntegerField(null = True, blank = True)                    
+    course_mode = models.CharField(max_length=20, choices=MODE_CHOICES, null=True, blank=True)
+    course_scheme = models.CharField(max_length=100, null=True, blank=True)
+    course_fees = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     #start_date = models.DateField(null=True, blank=True)
     #end_date = models.DateField(null=True, blank=True)
     course_status = models.CharField(choices = COURSE_STATUS, null = True, blank = True)
@@ -73,120 +89,181 @@ class Course(models.Model):
 # ─── 4. STUDENT ──────────────────────────────────────────────────────────────
 
 class Student(models.Model):
-    GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
-    CATEGORY_CHOICES = [ ("GEN", "GEN"), ("SC", "SC"), ("ST", "ST"), ("OBC", "OBC"), ("EWS", "EWS") ]
-
+    GENDER_CHOICES = [('M', 'Male'), ('F', 'Female')]
+    CATEGORY_CHOICES = [('GEN', 'General'), ('SC', 'SC'), ('ST', 'ST'), ('OBC', 'OBC')]
+    PAYMENT_STATUS_CHOICES = [('PENDING', 'Pending'), ('SUCCESS', 'Success'), ('FAILED', 'Failed')]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    application_number = models.CharField(max_length=50, unique=True)  # from Excel
+    
+    # Basic Info 
+    application_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
     registration_id = models.CharField(max_length=50, null=True, blank=True)
-    full_name = models.CharField(max_length=200)
+    candidate_name = models.CharField(max_length=200)
     father_name = models.CharField(max_length=200, null=True, blank=True)
     mother_name = models.CharField(max_length=200, null=True, blank=True)
-    gender = models.CharField(max_length=1, choices=GENDER_CHOICES, null=True, blank=True)
+    gender = models.CharField(max_length=1, choices=GENDER_CHOICES)
     date_of_birth = models.DateField(null=True, blank=True)
-    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES, null=True, blank=True)
-    is_pwd = models.BooleanField(default=False)
-    id_card_type = models.CharField(max_length=30, null=True, blank=True)
-    id_card_number = models.CharField(max_length=50, null=True, blank=True)
-    mobile_number = models.CharField(max_length=15, null=True, blank=True)
-    email = models.EmailField(null=True, blank=True)
+    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES, default='GEN')
+    is_pwd = models.BooleanField(null=True, blank=True, default=False)
+    
+    # Identity
+    id_card_type = models.CharField(max_length=50, default='Aadhaar Card')
+    id_card_number = models.CharField(max_length=100)
+    
+    # Contact
     address = models.TextField(null=True, blank=True)
-    qualification = models.CharField(max_length=200, null=True, blank=True)
-
-    def __str__(self):
-        return f"{self.full_name} ({self.application_number})"
-
-
-# ─── 5. ENROLLMENT (core of everything) ──────────────────────────────────────
-
-class Enrollment(models.Model):
-    STATUS_CHOICES = [
-        ("ENROLLED", "Enrolled"),
-        ("TRAINED", "Trained"),
-        ("CERTIFIED", "Certified"),
-        ("FAILED", "Failed"),
-        ("PLACED", "Placed"),
-        ("DROPPED", "Dropped"),
-    ]
-    PAYMENT_STATUS_CHOICES = [ ("PENDING", "Pending"), ("SUCCESS", "Success"), ("FAILED", "Failed"), ("REFUNDED", "Refunded")]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="enrollments")
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="enrollments")
-
-    # Lifecycle status — admin updates this
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ENROLLED")
-    application_date = models.DateField(null=True, blank=True)
-
-    # Payment info (from Excel)
-    fee_paid = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    payment_status = models.CharField(max_length=10, choices=PAYMENT_STATUS_CHOICES, default="PENDING")
+    mobile_number = models.CharField(max_length=15, null=True, blank=True)
+    email_id = models.EmailField(max_length=200, null=True, blank=True)
+    
+    # Qualification
+    qualification = models.TextField(null=True, blank=True)
+    course_applied = models.CharField(max_length=500, null=True, blank=True)  # Store original course name from Excel
+    
+    # Payment
+    application_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='PENDING')
     fee_reference_number = models.CharField(max_length=100, null=True, blank=True)
     transaction_id = models.CharField(max_length=100, null=True, blank=True)
-    payment_datetime = models.DateTimeField(null=True, blank=True)
-
-    # Exam results — admin fills after exam
-    marks_obtained = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    total_marks = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    is_passed = models.BooleanField(null=True, blank=True)
-
-    # Discount (admin sets or auto-computed)
-    discount_criteria = models.CharField(max_length=200, null=True, blank=True)
+    payment_date = models.DateTimeField(null=True, blank=True)
+    
+    # Discount
+    discount_criteria = models.CharField(max_length=500, null=True, blank=True)
     discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     total_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    # Placement
-    placed_date = models.DateField(null=True, blank=True)
-    placed_company = models.CharField(max_length=200, null=True, blank=True)
-
-    # Audit
-    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Dates
+    application_date = models.DateField(null=True, blank=True)
+    
+    # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("student", "course")]   # one enrollment per student per course
-
-    def save(self, *args, **kwargs):
-        # Auto-compute percentage when marks are present
-        if self.marks_obtained and self.total_marks:
-            self.percentage = round((self.marks_obtained / self.total_marks) * 100, 2)
-        # Auto-compute total_discount from fee and discount_percentage
-        fee = self.course.fee_amount or self.fee_paid
-        if fee and self.discount_percentage:
-            self.total_discount = round(fee * self.discount_percentage / 100, 2)
-        super().save(*args, **kwargs)
+        indexes = [
+            models.Index(fields=['candidate_name']),
+            models.Index(fields=['application_number']),
+            models.Index(fields=['mobile_number']),
+            models.Index(fields=['email_id']),
+        ]
 
     def __str__(self):
-        return f"{self.student.full_name} – {self.course.course_name} [{self.status}]"
+        return f"{self.candidate_name} ({self.application_number})"
 
 
-# ─── MIS QUERY (use in your API view) ────────────────────────────────────────
-#
-# from django.db.models import Count, Q
-#
-# Enrollment.objects.filter(
-#     course__centre__id__in=centre_ids,          # filter by centre(s)
-#     application_date__year=2026,                # filter by year
-#     application_date__month=3,                  # filter by month (optional)
-# ).values(
-#     "course__centre__centre_name",
-#     "course__course_category__category_type",
-#     "course__course_name",
-#     "course__duration_hours",
-#     "course__scheme",
-#     "course__mode",
-# ).annotate(
-#     total_enrolled  = Count("id", filter=Q(status__in=["ENROLLED","TRAINED","CERTIFIED","PLACED"])),
-#     total_trained   = Count("id", filter=Q(status__in=["TRAINED","CERTIFIED","PLACED"])),
-#     total_certified = Count("id", filter=Q(status="CERTIFIED")),
-#     total_placed    = Count("id", filter=Q(status="PLACED")),
-#     male_enrolled   = Count("id", filter=Q(student__gender="M")),
-#     female_enrolled = Count("id", filter=Q(student__gender="F")),
-#     sc_enrolled     = Count("id", filter=Q(student__category="SC")),
-#     st_enrolled     = Count("id", filter=Q(student__category="ST")),
-#     obc_enrolled    = Count("id", filter=Q(student__category="OBC")),
-#     pwd_enrolled    = Count("id", filter=Q(student__is_pwd=True)),
-#     # ... repeat trained/certified/placed per gender+category
-# )
+# =====================================================
+# SIMPLIFIED ENROLLMENT MODEL (Everything in one place)
+# =====================================================
+
+class Enrollment(models.Model):
+    EXAM_STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('PASSED', 'Passed'),
+        ('FAILED', 'Failed'),
+        ('ABSENT', 'Absent'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Links
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='enrollments')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='enrollments')
+    centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='enrollments')
+    
+    # Batch Info (simple fields, no separate table)
+    batch_name = models.CharField(max_length=200, null=True, blank=True)
+    custom_batch_name = models.CharField(max_length=400, null=True, blank=True)
+    batch_start_date = models.DateField(null=True, blank=True)
+    batch_end_date = models.DateField(null=True, blank=True)
+    
+    # Status Tracking (Simple boolean flags)
+    is_enrolled = models.BooleanField(default=False)
+    enrolled_date = models.DateField(null=True, blank=True)
+    
+    is_trained = models.BooleanField(default=False)
+    trained_date = models.DateField(null=True, blank=True)
+    
+    is_certified = models.BooleanField(default=False)
+    certified_date = models.DateField(null=True, blank=True)
+    #certificate_number = models.CharField(max_length=100, null=True, blank=True)
+    
+    is_placed = models.BooleanField(default=False)
+    placed_date = models.DateField(null=True, blank=True)
+    
+    # Exam Details
+    exam_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Percentage score 0-100")
+    exam_status = models.CharField(max_length=20, choices=EXAM_STATUS_CHOICES, default='PENDING')
+    
+    # Discount Applied
+    final_discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    final_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    # Attendance
+    total_attendance_hours = models.IntegerField(null=True, blank=True) 
+    attendance_hours = models.IntegerField(null=True, blank=True) 
+    attendance_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['student', 'course']  # One enrollment per student per course
+        indexes = [
+            models.Index(fields=['is_enrolled', 'is_trained', 'is_certified', 'is_placed']),
+            models.Index(fields=['batch_name']),
+            models.Index(fields=['centre', 'course']),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Auto-generate batch name if not provided
+        if not self.batch_name and self.centre and self.course:
+            month_year = timezone.now().strftime('%b %Y')
+            self.batch_name = f"{self.centre.centre_name} - {self.course.course_name} - {month_year}"
+        
+        # Auto-set enrolled date when status changes
+        if self.is_enrolled and not self.enrolled_date:
+            self.enrolled_date = timezone.now().date()
+        
+        # Auto-set trained date
+        if self.is_trained and not self.trained_date:
+            self.trained_date = timezone.now().date()
+        
+        # Auto-set certified date
+        if self.is_certified and not self.certified_date:
+            self.certified_date = timezone.now().date()
+        
+        # Auto-set placed date
+        if self.is_placed and not self.placed_date:
+            self.placed_date = timezone.now().date()
+        
+        # Calculate discount based on exam score
+        if self.exam_score and self.exam_status == 'PASSED':
+            self.final_discount_percentage = self.calculate_discount()
+            if self.course.course_fees:
+                self.final_discount_amount = (self.course.course_fees * self.final_discount_percentage / 100)
+        
+        super().save(*args, **kwargs)
+    
+    def calculate_discount(self):
+        """Calculate discount based on exam score and category"""
+        score = float(self.exam_score)
+        category = self.student.category
+        
+        # Discount rules (can be moved to database for flexibility)
+        if score >= 80:
+            return 75
+        elif score >= 70:
+            return 50
+        elif score >= 60:
+            return 25
+        elif score >= 50:
+            return 10
+        
+        # Category-based special discounts
+        if category in ['SC', 'ST'] and score >= 45:
+            return 15
+        
+        return 0
+    
+    def __str__(self):
+        return f"{self.student.candidate_name} - {self.course.course_name} - {self.batch_name}"

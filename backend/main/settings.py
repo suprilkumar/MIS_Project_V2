@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qsl
 from datetime import timedelta
-
+from pathlib import Path
 
 load_dotenv()
 
@@ -38,6 +38,9 @@ INSTALLED_APPS = [
     #Created Apps
     "account",
     "core",
+    "mis_report",
+    "student_management",
+    "batch_management",
 
     #Required Apps - Framework
     "rest_framework",
@@ -108,9 +111,9 @@ WSGI_APPLICATION = "main.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'mis_project',          # your DB name
-        'USER': 'suprilkumar',       # IMPORTANT (your actual role)
-        'PASSWORD': 'password', # your system/psql password
+        'NAME': 'mis_project_v2',          
+        'USER': 'postgres',       
+        'PASSWORD': 'password',
         'HOST': 'localhost',
         'PORT': '5432',
     }
