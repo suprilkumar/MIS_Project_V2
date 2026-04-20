@@ -1,4 +1,6 @@
 # mis_report/views.py
+import pandas as pd
+import numpy as np
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -6,11 +8,10 @@ from rest_framework import status
 from django.db import transaction
 from django.utils import timezone
 from datetime import datetime
-import pandas as pd
 import uuid
 import logging
 import traceback
-from core.models import Centre, Course, CourseCategory, Student, Enrollment
+from core.models import Centre, Course, CourseCategory, Student, Enrollment, Batch
 
 logger = logging.getLogger(__name__)
 
@@ -28,50 +29,33 @@ def mis_csv_upload(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Log file info for debugging
-        logger.info(f"Received file: {file.name}, size: {file.size}, type: {file.content_type}")
-        
-        # Parse file with better error handling
-        try:
-            if file.name.endswith('.csv'):
-                # Try different encodings for CSV
-                encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-                df = None
-                for encoding in encodings:
-                    try:
-                        file.seek(0)  # Reset file pointer
-                        df = pd.read_csv(file, encoding=encoding, dtype=str)
-                        logger.info(f"Successfully read CSV with encoding: {encoding}")
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                
-                if df is None:
-                    raise ValueError("Could not read CSV file with any common encoding")
-                    
-            elif file.name.endswith(('.xlsx', '.xls')):
-                file.seek(0)
-                df = pd.read_excel(file, dtype=str, engine='openpyxl')
-                logger.info("Successfully read Excel file")
-            else:
-                return Response(
-                    {"error": "Unsupported file format. Please upload CSV or Excel file"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        except Exception as e:
-            logger.error(f"File parsing error: {str(e)}")
+        # Parse file
+        if file.name.endswith('.csv'):
+            encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+            df = None
+            for encoding in encodings:
+                try:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding=encoding, dtype=str)
+                    logger.info(f"Successfully read CSV with encoding: {encoding}")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if df is None:
+                raise ValueError("Could not read CSV file with any common encoding")
+        elif file.name.endswith(('.xlsx', '.xls')):
+            file.seek(0)
+            df = pd.read_excel(file, dtype=str, engine='openpyxl')
+        else:
             return Response(
-                {"error": f"Could not parse file: {str(e)}. Please ensure it's a valid CSV or Excel file."},
+                {"error": "Unsupported file format"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Clean column names (strip whitespace)
+        # Clean column names
         df.columns = df.columns.str.strip()
         
-        # Log columns found for debugging
-        logger.info(f"Columns found in file: {list(df.columns)}")
-        
-        # Define required columns (case-insensitive check)
+        # Define required columns
         required_cols = ["Course Location", "Course Applied", "Payment Status", "Application Date"]
         normalized_cols = {col.lower(): col for col in df.columns}
         
@@ -82,7 +66,7 @@ def mis_csv_upload(request):
         
         if missing_cols:
             return Response(
-                {"error": f"Missing required columns: {', '.join(missing_cols)}. Found columns: {list(df.columns)}"},
+                {"error": f"Missing required columns: {', '.join(missing_cols)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -98,54 +82,42 @@ def mis_csv_upload(request):
         df_success = df[df["Payment Status"] == "SUCCESS"].copy()
         
         if len(df_success) == 0:
-            # Show payment status distribution for debugging
             payment_counts = df["Payment Status"].value_counts().to_dict()
             return Response(
                 {"error": f"No successful payment records found. Payment status distribution: {payment_counts}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Parse date function with multiple formats
+        # Parse date function
         def parse_date(date_str):
             if pd.isna(date_str) or date_str == '' or date_str == 'nan':
                 return None
             date_str = str(date_str).strip()
-            
-            # Try different date formats
             date_formats = [
-                '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',  # DD/MM/YYYY
-                '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',  # MM/DD/YYYY
-                '%Y/%m/%d', '%Y-%m-%d', '%Y.%m.%d',  # YYYY/MM/DD
-                '%d/%m/%y', '%d-%m-%y',               # DD/MM/YY
-                '%m/%d/%y', '%m-%d-%y',               # MM/DD/YY
+                '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+                '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',
+                '%Y/%m/%d', '%Y-%m-%d', '%Y.%m.%d',
+                '%d/%m/%y', '%d-%m-%y',
             ]
-            
             for fmt in date_formats:
                 try:
                     return datetime.strptime(date_str, fmt).date()
                 except (ValueError, TypeError):
                     continue
-            
-            # Try pandas to_datetime as fallback
             try:
                 return pd.to_datetime(date_str).date()
             except:
-                pass
-            
-            logger.warning(f"Could not parse date: {date_str}")
-            return None
+                return None
         
         def parse_datetime(date_str):
             if pd.isna(date_str) or date_str == '' or date_str == 'nan':
                 return None
             date_str = str(date_str).strip()
-            
             datetime_formats = [
                 '%d/%m/%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S',
                 '%d/%m/%Y', '%d-%m-%Y',
                 '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'
             ]
-            
             for fmt in datetime_formats:
                 try:
                     return datetime.strptime(date_str, fmt)
@@ -159,32 +131,28 @@ def mis_csv_upload(request):
         courses_set = set()
         courses_by_centre = {}
         
-        # Get column names with fallbacks
         course_location_col = col_mapping.get("Course Location", "Course Location")
         course_applied_col = "Course Applied"
         app_date_col = col_mapping.get("Application Date", "Application Date")
         
         for idx, row in df_success.iterrows():
             try:
-                # Extract month-year for summary
                 app_date = parse_date(row.get(app_date_col, ""))
                 month_year = app_date.strftime("%b %Y") if app_date else "Unknown"
                 
-                # Safely get values
                 course_location = str(row.get(course_location_col, "")).strip()
                 course_applied = str(row.get(course_applied_col, "")).strip()
                 
                 if not course_location or not course_applied:
-                    logger.warning(f"Skipping row {idx}: Missing course location or course applied")
                     continue
                 
                 student_info = {
                     "id": str(uuid.uuid4()),
                     "month_year": month_year,
                     "course_location": course_location,
+                    "course_applied": course_applied,
                     "application_number": str(row.get("Application Number", "")).strip(),
                     "registration_id": str(row.get("Registration ID", "")).strip(),
-                    "course_applied": course_applied,
                     "candidate_name": str(row.get("Candidate Name", row.get("Student Name", ""))).strip(),
                     "father_name": str(row.get("Father Name", "")).strip(),
                     "mother_name": str(row.get("Mother Name", "")).strip(),
@@ -210,7 +178,6 @@ def mis_csv_upload(request):
                 }
                 students_data.append(student_info)
                 
-                # Collect centres and courses for summary
                 centres_set.add(course_location)
                 courses_set.add(course_applied)
                 
@@ -224,10 +191,11 @@ def mis_csv_upload(request):
         
         if len(students_data) == 0:
             return Response(
-                {"error": "No valid student records found in the file. Please check the data format."},
+                {"error": "No valid student records found"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Prepare centre_course_counts
         centre_course_counts = []
         for centre in centres_set:
             centre_data = {
@@ -235,16 +203,13 @@ def mis_csv_upload(request):
                 "courses": {},
                 "total": 0
             }
-            # Count students per course for this centre
             centre_students = [s for s in students_data if s["course_location"] == centre]
             for student in centre_students:
                 course = student["course_applied"]
                 centre_data["courses"][course] = centre_data["courses"].get(course, 0) + 1
                 centre_data["total"] += 1
             centre_course_counts.append(centre_data)
-
         
-        # Prepare summary
         summary = {
             "total_students": len(students_data),
             "total_centres": len(centres_set),
@@ -258,29 +223,28 @@ def mis_csv_upload(request):
             "months_range": sorted(set([s["month_year"] for s in students_data if s["month_year"] != "Unknown"]))
         }
         
-        response_data = {
+        return Response({
             "summary": summary,
             "students": students_data,
-            "total_students": len(students_data),
-            "columns_found": list(df.columns)  # Send back for debugging
-        }
-        
-        logger.info(f"Successfully processed {len(students_data)} students")
-        
-        return Response(response_data, status=status.HTTP_200_OK)
+            "total_students": len(students_data)
+        }, status=status.HTTP_200_OK)
         
     except Exception as e:
         logger.error(f"Error in mis_csv_upload: {str(e)}")
         logger.error(traceback.format_exc())
         return Response(
-            {"error": f"Error processing file: {str(e)}. Please check the file format and try again."},
+            {"error": f"Error processing file: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
 @api_view(['POST'])
 def save_uploaded_students(request):
-    """Save uploaded students to database after verification"""
+    """Save uploaded students to database with course and centre relationships"""
     try:
+        from core.models import Centre, Course, CourseCategory, Student
+        from django.db import transaction
+        
         students_data = request.data.get('students', [])
         
         if not students_data:
@@ -289,6 +253,13 @@ def save_uploaded_students(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Get or create default course category
+        default_category, _ = CourseCategory.objects.get_or_create(
+            category_type='A',
+            category_name='Default Category',
+            defaults={'course_category_desc': 'Auto-created default category'}
+        )
+        
         created_count = 0
         updated_count = 0
         errors = []
@@ -296,30 +267,56 @@ def save_uploaded_students(request):
         with transaction.atomic():
             for student_info in students_data:
                 try:
-                    # Create or update student using get_or_create
-                    student, created = Student.objects.get_or_create(
-                        application_number=student_info.get('application_number'),
+                    # Get or create centre
+                    centre, centre_created = Centre.objects.get_or_create(
+                        centre_name=student_info.get('course_location'),
                         defaults={
-                            'registration_id': student_info.get('registration_id'),
+                            'centre_address': 'To be updated',
+                            'centre_state': 'Delhi'
+                        }
+                    )
+                    
+                    # Get or create course
+                    course, course_created = Course.objects.get_or_create(
+                        course_name=student_info.get('course_applied'),
+                        centre=centre,
+                        defaults={
+                            'course_category': default_category,
+                            'course_status': 'ACTIVE'
+                        }
+                    )
+                    
+                    # Check if student exists
+                    application_number = student_info.get('application_number')
+                    if not application_number:
+                        errors.append(f"Skipping student {student_info.get('candidate_name')}: No application number")
+                        continue
+                    
+                    # Create or update student (without batch assignment initially)
+                    student, created = Student.objects.get_or_create(
+                        application_number=application_number,
+                        defaults={
+                            'course': course,
+                            'centre': centre,
+                            'registration_id': student_info.get('registration_id', ''),
                             'candidate_name': student_info.get('candidate_name', 'Unknown'),
-                            'father_name': student_info.get('father_name'),
-                            'mother_name': student_info.get('mother_name'),
+                            'father_name': student_info.get('father_name', ''),
+                            'mother_name': student_info.get('mother_name', ''),
                             'gender': student_info.get('gender', 'M'),
                             'date_of_birth': student_info.get('date_of_birth'),
                             'category': student_info.get('category', 'GEN'),
                             'id_card_type': student_info.get('id_card_type', 'Aadhaar Card'),
                             'id_card_number': student_info.get('id_card_number', ''),
-                            'address': student_info.get('address'),
-                            'mobile_number': student_info.get('mobile_number'),
-                            'email_id': student_info.get('email_id'),
-                            'qualification': student_info.get('qualification'),
-                            'course_applied': student_info.get('course_applied'),
+                            'address': student_info.get('address', ''),
+                            'mobile_number': student_info.get('mobile_number', ''),
+                            'email_id': student_info.get('email_id', ''),
+                            'qualification': student_info.get('qualification', ''),
                             'application_fee': student_info.get('application_fee', 0),
                             'payment_status': student_info.get('payment_status', 'PENDING'),
-                            'fee_reference_number': student_info.get('fee_reference_number'),
-                            'transaction_id': student_info.get('transaction_id'),
+                            'fee_reference_number': student_info.get('fee_reference_number', ''),
+                            'transaction_id': student_info.get('transaction_id', ''),
                             'payment_date': student_info.get('payment_date'),
-                            'discount_criteria': student_info.get('discount_criteria'),
+                            'discount_criteria': student_info.get('discount_criteria', ''),
                             'discount_percentage': student_info.get('discount_percentage', 0),
                             'total_discount': student_info.get('total_discount', 0),
                             'application_date': student_info.get('application_date'),
@@ -328,6 +325,8 @@ def save_uploaded_students(request):
                     
                     if not created:
                         # Update existing student
+                        student.course = course
+                        student.centre = centre
                         student.registration_id = student_info.get('registration_id', student.registration_id)
                         student.candidate_name = student_info.get('candidate_name', student.candidate_name)
                         student.father_name = student_info.get('father_name', student.father_name)
@@ -341,7 +340,6 @@ def save_uploaded_students(request):
                         student.mobile_number = student_info.get('mobile_number', student.mobile_number)
                         student.email_id = student_info.get('email_id', student.email_id)
                         student.qualification = student_info.get('qualification', student.qualification)
-                        student.course_applied = student_info.get('course_applied', student.course_applied)
                         student.application_fee = student_info.get('application_fee', student.application_fee)
                         student.payment_status = student_info.get('payment_status', student.payment_status)
                         student.fee_reference_number = student_info.get('fee_reference_number', student.fee_reference_number)
@@ -358,6 +356,7 @@ def save_uploaded_students(request):
                         
                 except Exception as e:
                     errors.append(f"Error saving student {student_info.get('candidate_name')}: {str(e)}")
+                    logger.error(f"Error saving student: {str(e)}")
         
         return Response({
             'message': f'Successfully saved {created_count + updated_count} students',
@@ -376,8 +375,11 @@ def save_uploaded_students(request):
 
 @api_view(['POST'])
 def create_batches_from_students(request):
-    """Create batches from selected students using get_or_create"""
+    """Create batches and assign students to them"""
     try:
+        from core.models import Centre, Course, CourseCategory, Student, Batch
+        from django.db import transaction
+        
         data = request.data
         created_count = 0
         updated_count = 0
@@ -392,35 +394,59 @@ def create_batches_from_students(request):
         
         with transaction.atomic():
             for batch_request in data:
+                centre_id = batch_request.get('centre_id')
                 centre_name = batch_request.get('centre_name')
+                course_id = batch_request.get('course_id')
                 course_name = batch_request.get('course_name')
                 student_ids = batch_request.get('student_ids', [])
                 batch_info = batch_request.get('batch_info', {})
                 
                 # Get or create centre
-                centre, centre_created = Centre.objects.get_or_create(
-                    centre_name=centre_name,
-                    defaults={
-                        'centre_address': 'To be updated',
-                        'centre_state': 'Delhi'
-                    }
-                )
+                centre = None
+                if centre_id:
+                    try:
+                        centre = Centre.objects.get(id=centre_id)
+                    except Centre.DoesNotExist:
+                        logger.warning(f"Centre with id {centre_id} not found")
                 
-                if centre_created:
-                    logger.info(f"Created new centre: {centre_name}")
+                if not centre and centre_name:
+                    centre, centre_created = Centre.objects.get_or_create(
+                        centre_name=centre_name,
+                        defaults={
+                            'centre_address': 'To be updated',
+                            'centre_state': 'Delhi'
+                        }
+                    )
+                    if centre_created:
+                        logger.info(f"Created new centre: {centre_name}")
+                
+                if not centre:
+                    errors.append(f"Centre not found: {centre_name or centre_id}")
+                    continue
                 
                 # Get or create course
-                course, course_created = Course.objects.get_or_create(
-                    course_name=course_name,
-                    centre=centre,
-                    defaults={
-                        'course_category': default_category,
-                        'course_status': 'ACTIVE'
-                    }
-                )
+                course = None
+                if course_id:
+                    try:
+                        course = Course.objects.get(id=course_id)
+                    except Course.DoesNotExist:
+                        logger.warning(f"Course with id {course_id} not found")
                 
-                if course_created:
-                    logger.info(f"Created new course: {course_name} at {centre_name}")
+                if not course and course_name:
+                    course, course_created = Course.objects.get_or_create(
+                        course_name=course_name,
+                        centre=centre,
+                        defaults={
+                            'course_category': default_category,
+                            'course_status': 'ACTIVE'
+                        }
+                    )
+                    if course_created:
+                        logger.info(f"Created new course: {course_name} at {centre.centre_name}")
+                
+                if not course:
+                    errors.append(f"Course not found: {course_name or course_id}")
+                    continue
                 
                 # Determine final batch name
                 if batch_info.get('custom_batch_name'):
@@ -428,47 +454,53 @@ def create_batches_from_students(request):
                 else:
                     final_batch_name = batch_info.get('batch_name', f"{course_name} - {centre_name}")
                 
-                # Process each student
+                # Create a single batch for this course/centre combination
+                batch, batch_created = Batch.objects.get_or_create(
+                    course=course,
+                    centre=centre,
+                    batch_name=final_batch_name,
+                    defaults={
+                        'custom_batch_name': batch_info.get('custom_batch_name', ''),
+                        'batch_start_date': batch_info.get('batch_start_date'),
+                        'batch_end_date': batch_info.get('batch_end_date'),
+                        'faculty_name': batch_info.get('faculty_name', ''),
+                        'max_capacity': batch_info.get('max_capacity', 30)
+                    }
+                )
+                
+                if batch_created:
+                    created_count += 1
+                    logger.info(f"Created new batch: {final_batch_name}")
+                else:
+                    # Update existing batch
+                    batch.custom_batch_name = batch_info.get('custom_batch_name', batch.custom_batch_name)
+                    batch.batch_start_date = batch_info.get('batch_start_date', batch.batch_start_date)
+                    batch.batch_end_date = batch_info.get('batch_end_date', batch.batch_end_date)
+                    batch.faculty_name = batch_info.get('faculty_name', batch.faculty_name)
+                    batch.max_capacity = batch_info.get('max_capacity', batch.max_capacity)
+                    batch.save()
+                    updated_count += 1
+                    logger.info(f"Updated batch: {final_batch_name}")
+                
+                # Assign students to this batch
+                students_assigned = 0
                 for student_id in student_ids:
                     try:
                         student = Student.objects.get(id=student_id)
-                        
-                        # Create or update enrollment
-                        enrollment, created = Enrollment.objects.get_or_create(
-                            student=student,
-                            course=course,
-                            centre=centre,
-                            defaults={
-                                'batch_name': final_batch_name,
-                                'custom_batch_name': batch_info.get('custom_batch_name', ''),
-                                'batch_start_date': batch_info.get('batch_start_date'),
-                                'batch_end_date': batch_info.get('batch_end_date'),
-                                'is_enrolled': True,
-                                'enrolled_date': timezone.now().date(),
-                            }
-                        )
-                        
-                        if not created:
-                            enrollment.batch_name = final_batch_name
-                            enrollment.custom_batch_name = batch_info.get('custom_batch_name', '')
-                            enrollment.batch_start_date = batch_info.get('batch_start_date')
-                            enrollment.batch_end_date = batch_info.get('batch_end_date')
-                            enrollment.is_enrolled = True
-                            enrollment.enrolled_date = timezone.now().date()
-                            enrollment.save()
-                            updated_count += 1
-                        else:
-                            created_count += 1
-                            
+                        student.batch = batch
+                        student.save()
+                        students_assigned += 1
                     except Student.DoesNotExist:
                         errors.append(f"Student with id {student_id} not found")
                     except Exception as e:
-                        errors.append(f"Error processing student {student_id}: {str(e)}")
+                        errors.append(f"Error assigning student {student_id}: {str(e)}")
+                
+                logger.info(f"Assigned {students_assigned} students to batch {final_batch_name}")
         
         return Response({
-            'message': f'Successfully processed {created_count + updated_count} enrollments',
-            'created': created_count,
-            'updated': updated_count,
+            'message': f'Successfully processed {created_count + updated_count} batches with {len(data)} groups',
+            'batches_created': created_count,
+            'batches_updated': updated_count,
             'errors': errors
         }, status=status.HTTP_200_OK)
         
@@ -489,6 +521,7 @@ def get_centres_list(request):
             "centres": list(centres)
         }, status=status.HTTP_200_OK)
     except Exception as e:
+        logger.error(f"Error in get_centres_list: {str(e)}")
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -504,6 +537,92 @@ def get_courses_by_centre(request, centre_id):
             "courses": list(courses)
         }, status=status.HTTP_200_OK)
     except Exception as e:
+        logger.error(f"Error in get_courses_by_centre: {str(e)}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+def get_saved_students(request):
+    """Get saved students for batch creation"""
+    try:
+        students = Student.objects.filter(payment_status='SUCCESS').select_related('course', 'centre')
+        
+        # Group students by course and centre
+        grouped_students = {}
+        for student in students:
+            if not student.centre or not student.course:
+                continue
+                
+            key = f"{student.centre.id}|{student.course.id}"
+            if key not in grouped_students:
+                grouped_students[key] = {
+                    'centre_name': student.centre.centre_name,
+                    'centre_id': str(student.centre.id),
+                    'course_name': student.course.course_name,
+                    'course_id': str(student.course.id),
+                    'students': []
+                }
+            grouped_students[key]['students'].append({
+                'id': str(student.id),
+                'application_number': student.application_number or '',
+                'registration_id': student.registration_id or '',
+                'candidate_name': student.candidate_name,
+                'gender': student.gender,
+                'category': student.category,
+                'mobile_number': student.mobile_number or '',
+                'email_id': student.email_id or '',
+                'application_fee': float(student.application_fee) if student.application_fee else 0,
+                'payment_status': student.payment_status,
+                'application_date': student.application_date.strftime('%Y-%m-%d') if student.application_date else None,
+            })
+        
+        return Response({
+            "groups": list(grouped_students.values()),
+            "total_students": students.count(),
+            "total_groups": len(grouped_students)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error in get_saved_students: {str(e)}", exc_info=True)
+        return Response({
+            "groups": [],
+            "total_students": 0,
+            "total_groups": 0,
+            "error": str(e)
+        }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def get_batches(request):
+    """Get all batches"""
+    try:
+        batches = Batch.objects.select_related('course', 'centre').prefetch_related('students')
+        
+        batches_list = []
+        for batch in batches:
+            batches_list.append({
+                'id': str(batch.id),
+                'batch_name': batch.batch_name or '',
+                'custom_batch_name': batch.custom_batch_name or '',
+                'course_name': batch.course.course_name,
+                'centre_name': batch.centre.centre_name,
+                'batch_start_date': batch.batch_start_date.strftime('%Y-%m-%d') if batch.batch_start_date else None,
+                'batch_end_date': batch.batch_end_date.strftime('%Y-%m-%d') if batch.batch_end_date else None,
+                'faculty_name': batch.faculty_name or '',
+                'max_capacity': batch.max_capacity or 0,
+                'current_enrollment': batch.students.count(),
+                'is_full': batch.is_full
+            })
+        
+        return Response({
+            "batches": batches_list,
+            "total": len(batches_list)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error in get_batches: {str(e)}", exc_info=True)
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -511,26 +630,46 @@ def get_courses_by_centre(request, centre_id):
 
 
 @api_view(['GET'])
-def get_saved_students(request):
-    """Get saved students for batch creation"""
+def get_batch_detail(request, batch_id):
+    """Get detailed information for a specific batch"""
     try:
-        students = Student.objects.filter(payment_status='SUCCESS').values(
-            'id', 'application_number', 'registration_id', 'candidate_name',
-            'gender', 'category', 'mobile_number', 'email_id', 'application_fee',
-            'application_date', 'course_applied'
-        )
+        batch = Batch.objects.select_related('course', 'centre').prefetch_related('students').get(id=batch_id)
         
-        # Add course_location (from course_applied mapping or separate field)
-        students_list = list(students)
-        for student in students_list:
-            student['course_location'] = 'To be mapped'  # You can add logic to map course to centre
+        students_list = []
+        for student in batch.students.all():
+            students_list.append({
+                'id': str(student.id),
+                'candidate_name': student.candidate_name,
+                'application_number': student.application_number,
+                'gender': student.gender,
+                'category': student.category,
+                'mobile_number': student.mobile_number,
+                'email_id': student.email_id,
+                'payment_status': student.payment_status
+            })
         
         return Response({
-            "students": students_list,
-            "total": len(students_list)
+            'id': str(batch.id),
+            'batch_name': batch.batch_name,
+            'custom_batch_name': batch.custom_batch_name,
+            'course_name': batch.course.course_name,
+            'centre_name': batch.centre.centre_name,
+            'batch_start_date': batch.batch_start_date,
+            'batch_end_date': batch.batch_end_date,
+            'faculty_name': batch.faculty_name,
+            'max_capacity': batch.max_capacity,
+            'current_enrollment': len(students_list),
+            'is_full': batch.is_full,
+            'students': students_list
         }, status=status.HTTP_200_OK)
         
+    except Batch.DoesNotExist:
+        return Response(
+            {"error": "Batch not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
     except Exception as e:
+        logger.error(f"Error in get_batch_detail: {str(e)}", exc_info=True)
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -260,7 +260,6 @@ class BatchCreationService:
             centre=centre,
             defaults={
                 'course_status': 'ACTIVE',
-                'course_category_id': 'default-category-uuid'  # You'll need to handle this
             }
         )
         

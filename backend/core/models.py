@@ -4,7 +4,6 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 
 # ─── 1. CENTRE ───────────────────────────────────────────────────────────────
-
 class Centre(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     centre_name = models.CharField(max_length=100)
@@ -13,17 +12,15 @@ class Centre(models.Model):
     centre_contact = models.CharField(max_length=20, null=True, blank=True)
     centre_email = models.EmailField(null=True, blank=True)
     centre_desc = models.TextField(null=True, blank=True)
-    centre_admin = models.OneToOneField('account.User', on_delete=models.SET_NULL,  null=True,  blank=True, 
-        related_name='managed_centre',
-        limit_choices_to={'role': 'centreadmin'}
-    )
+    centre_admin = models.OneToOneField('account.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='managed_centre', limit_choices_to={'role': 'centreadmin'})
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
-        return f"{self.centre_name} - {self.centre_state} - {self.centre_address}"
+        return self.centre_name
 
 
 # ─── 2. COURSE CATEGORY ──────────────────────────────────────────────────────
-
 class CourseCategory(models.Model):
     CATEGORY_TYPE_CHOICES = [
         ('A', 'A - Long Term >500hrs'),
@@ -39,15 +36,14 @@ class CourseCategory(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     category_type = models.CharField(max_length=1, choices=CATEGORY_TYPE_CHOICES)
     category_name = models.CharField(max_length=200) 
-    course_category_desc = models.TextField(null = True, blank = True)
-    created_datetime = models.DateTimeField(auto_now_add = True, null = True, blank = True)         
+    course_category_desc = models.TextField(null=True, blank=True)
+    created_datetime = models.DateTimeField(auto_now_add=True, null=True, blank=True)         
 
     def __str__(self):
         return f"{self.category_type} – {self.category_name}"
 
 
 # ─── 3. COURSE ───────────────────────────────────────────────────────────────
-
 class Course(models.Model):
     MODE_CHOICES = [
         ("OnCampus", "On Campus"), 
@@ -68,32 +64,79 @@ class Course(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     course_name = models.CharField(max_length=300)  
-    course_category = models.ForeignKey(CourseCategory, on_delete=models.CASCADE, related_name="courses")
+    course_category = models.ForeignKey(CourseCategory, on_delete=models.CASCADE, related_name="courses", null=True, blank=True)
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name="courses")
-    course_desc = models.TextField(null = True, blank = True)         
-    duration_hours = models.IntegerField(null = True, blank = True)                    
+    course_desc = models.TextField(null=True, blank=True)         
+    duration_hours = models.IntegerField(null=True, blank=True)                    
     course_mode = models.CharField(max_length=20, choices=MODE_CHOICES, null=True, blank=True)
     course_scheme = models.CharField(max_length=100, null=True, blank=True)
     course_fees = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    #start_date = models.DateField(null=True, blank=True)
-    #end_date = models.DateField(null=True, blank=True)
-    course_status = models.CharField(choices = COURSE_STATUS, null = True, blank = True)
-    created_at = models.DateTimeField(auto_now_add = True, null = True, blank = True)
-    updated_at = models.DateTimeField(auto_now = True, null = True, blank = True)
-
+    course_status = models.CharField(max_length=200, choices=COURSE_STATUS, null=True, blank=True, default='ACTIVE')
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.course_name} – {self.centre.centre_name}"
 
 
-# ─── 4. STUDENT ──────────────────────────────────────────────────────────────
+# ─── 4. BATCH (MOVED BEFORE STUDENT) ─────────────────────────────────────────
+class Batch(models.Model):
+    BATCH_STATUS = [
+        ('ACTIVE', 'Active'),
+        ('INACTIVE', 'Inactive'),
+        ('COMPLETED', 'Completed'),
+        ('UPCOMING', 'Upcoming'),
+        ('CANCELLED', 'Cancelled'),
+        ('HOLD', 'Hold'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
+    centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
+
+    batch_name = models.CharField(max_length=200, null=True, blank=True)
+    custom_batch_name = models.CharField(max_length=400, null=True, blank=True)
+    batch_start_date = models.DateField(null=True, blank=True)
+    batch_end_date = models.DateField(null=True, blank=True)
+
+    batch_status = models.CharField(max_length=200, choices=BATCH_STATUS, null=True, blank=True, default='ACTIVE')
+
+    faculty_name = models.CharField(max_length=200, null=True, blank=True)
+    max_capacity = models.IntegerField(null=True, blank=True, default=30)
+    
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    def __str__(self):
+        batch_display = self.custom_batch_name or self.batch_name or "Unnamed Batch"
+        return f"{batch_display}"
+    
+    @property
+    def current_enrollment_count(self):
+        """Get current number of students enrolled in this batch"""
+        # Note: This needs to be updated since Batch doesn't have direct course/centre links
+        from core.models import Student
+        return Student.objects.filter(batch=self).count()
+    
+    @property
+    def is_full(self):
+        """Check if batch is full"""
+        if self.max_capacity:
+            return self.current_enrollment_count >= self.max_capacity
+        return False
+
+
+# ─── 5. STUDENT ──────────────────────────────────────────────────────────────
 class Student(models.Model):
     GENDER_CHOICES = [('M', 'Male'), ('F', 'Female')]
     CATEGORY_CHOICES = [('GEN', 'General'), ('SC', 'SC'), ('ST', 'ST'), ('OBC', 'OBC')]
     PAYMENT_STATUS_CHOICES = [('PENDING', 'Pending'), ('SUCCESS', 'Success'), ('FAILED', 'Failed')]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='students', null=True, blank=True)
+    centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='students', null=True, blank=True)
+    batch = models.ForeignKey(Batch, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     
     # Basic Info 
     application_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
@@ -117,7 +160,6 @@ class Student(models.Model):
     
     # Qualification
     qualification = models.TextField(null=True, blank=True)
-    course_applied = models.CharField(max_length=500, null=True, blank=True)  # Store original course name from Excel
     
     # Payment
     application_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -150,10 +192,7 @@ class Student(models.Model):
         return f"{self.candidate_name} ({self.application_number})"
 
 
-# =====================================================
-# SIMPLIFIED ENROLLMENT MODEL (Everything in one place)
-# =====================================================
-
+# ─── 6. ENROLLMENT ──────────────────────────────────────────────────────────
 class Enrollment(models.Model):
     EXAM_STATUS_CHOICES = [
         ('PENDING', 'Pending'),
@@ -164,18 +203,11 @@ class Enrollment(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
-    # Links
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='enrollments')
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='enrollments')
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='enrollments')
     
-    # Batch Info (simple fields, no separate table)
-    batch_name = models.CharField(max_length=200, null=True, blank=True)
-    custom_batch_name = models.CharField(max_length=400, null=True, blank=True)
-    batch_start_date = models.DateField(null=True, blank=True)
-    batch_end_date = models.DateField(null=True, blank=True)
-    
-    # Status Tracking (Simple boolean flags)
+    # Status Tracking
     is_enrolled = models.BooleanField(default=False)
     enrolled_date = models.DateField(null=True, blank=True)
     
@@ -184,7 +216,6 @@ class Enrollment(models.Model):
     
     is_certified = models.BooleanField(default=False)
     certified_date = models.DateField(null=True, blank=True)
-    #certificate_number = models.CharField(max_length=100, null=True, blank=True)
     
     is_placed = models.BooleanField(default=False)
     placed_date = models.DateField(null=True, blank=True)
@@ -207,19 +238,13 @@ class Enrollment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ['student', 'course']  # One enrollment per student per course
+        unique_together = ['student', 'course']
         indexes = [
             models.Index(fields=['is_enrolled', 'is_trained', 'is_certified', 'is_placed']),
-            models.Index(fields=['batch_name']),
             models.Index(fields=['centre', 'course']),
         ]
 
     def save(self, *args, **kwargs):
-        # Auto-generate batch name if not provided
-        if not self.batch_name and self.centre and self.course:
-            month_year = timezone.now().strftime('%b %Y')
-            self.batch_name = f"{self.centre.centre_name} - {self.course.course_name} - {month_year}"
-        
         # Auto-set enrolled date when status changes
         if self.is_enrolled and not self.enrolled_date:
             self.enrolled_date = timezone.now().date()
@@ -237,19 +262,22 @@ class Enrollment(models.Model):
             self.placed_date = timezone.now().date()
         
         # Calculate discount based on exam score
-        if self.exam_score and self.exam_status == 'PASSED':
+        if self.exam_score and self.exam_status == 'PASSED' and self.student and self.student.course:
             self.final_discount_percentage = self.calculate_discount()
-            if self.course.course_fees:
-                self.final_discount_amount = (self.course.course_fees * self.final_discount_percentage / 100)
+            if self.student.course.course_fees:
+                self.final_discount_amount = (self.student.course.course_fees * self.final_discount_percentage / 100)
         
         super().save(*args, **kwargs)
     
     def calculate_discount(self):
         """Calculate discount based on exam score and category"""
+        if not self.exam_score:
+            return 0
+            
         score = float(self.exam_score)
         category = self.student.category
         
-        # Discount rules (can be moved to database for flexibility)
+        # Discount rules
         if score >= 80:
             return 75
         elif score >= 70:
@@ -266,4 +294,4 @@ class Enrollment(models.Model):
         return 0
     
     def __str__(self):
-        return f"{self.student.candidate_name} - {self.course.course_name} - {self.batch_name}"
+        return f"{self.student.candidate_name} - {self.course.course_name}"

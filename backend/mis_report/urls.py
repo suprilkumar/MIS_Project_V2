@@ -9,6 +9,8 @@ urlpatterns = [
     
     # Batch management
     path('batches/create/', views.create_batches_from_students, name='create_batches'),
+    path('batches/', views.get_batches, name='get_batches'),
+    path('batches/<uuid:batch_id>/', views.get_batch_detail, name='get_batch_detail'),
     
     # Data retrieval endpoints
     path('centres/', views.get_centres_list, name='centres_list'),

@@ -34,6 +34,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+
+    #Required Apps - Framework
+    "rest_framework",
+    "corsheaders",
      
     #Created Apps
     "account",
@@ -41,10 +45,7 @@ INSTALLED_APPS = [
     "mis_report",
     "student_management",
     "batch_management",
-
-    #Required Apps - Framework
-    "rest_framework",
-    "corsheaders",
+ 
 ]
 
 CORS_ALLOW_METHODS = [

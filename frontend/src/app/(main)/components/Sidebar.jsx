@@ -71,28 +71,34 @@ const Sidebar = ({ isOpen, onClose }) => {
       ]
     },
     {
+      type: 'link',
+      path: '/course-management',
+      icon: <FaFileAlt className="text-xl" />,
+      label: 'Manage Courses'
+    },
+    {
       type: 'dropdown',
-      key: 'category',
+      key: 'student-management',
       icon: <FaFolder className="text-xl" />,
-      label: 'Course Category',
+      label: 'Student Management',
       items: [
-        { path: '/dashboard/admin/course-category/add-course-category', icon: <FaPlus />, label: 'Add Course Category' },
-        { path: '/dashboard/admin/course-category', icon: <FaList />, label: 'Manage Course Categories' }
+        { path: '/student-management/#', icon: <FaPlus />, label: 'Temp Link' },
+        { path: '/student-management/view', icon: <FaList />, label: 'View Students' },
+        { path: '/student-management/batch-students', icon: <FaList />, label: 'Batch Students' },
       ]
     },
     {
       type: 'dropdown',
-      key: 'course',
-      icon: <FaBook className="text-xl" />,
-      label: 'Course',
+      key: 'batch-management',
+      icon: <FaFolder className="text-xl" />,
+      label: 'Batch Management',
       items: [
-        { path: '/dashboard/operator/course', icon: <FaList />, label: 'Manage Courses' },
-        { path: '/dashboard/operator/course/add-course', icon: <FaPlus />, label: 'Add Course' },
-        { path: '/dashboard/operator/course/active', icon: <FaCheck />, label: 'Active Courses' },
-        { path: '/dashboard/operator/course/inactive', icon: <FaTimes />, label: 'Inactive Courses' }
+        { path: '/batch-management/#', icon: <FaPlus />, label: 'Temp Link' },
+        { path: '/batch-management/view', icon: <FaList />, label: 'View Batches' }
       ]
     },
-       {
+   
+    {
       type: 'link',
       path: '/mis-data/upload',
       icon: <FaFileAlt className="text-xl" />,
